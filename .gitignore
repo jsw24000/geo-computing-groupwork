@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+data/raw/
+data/processed/
+data/latents/
+outputs/
+
+# Reference PDFs are local reading material and should not be submitted as code.
+2505.19175v1.pdf
+Octree-GS.pdf
+课程大作业选题.pdf
+papers/*.pdf
+references/*.pdf
+
+*.pt
+*.pth
+*.ckpt
