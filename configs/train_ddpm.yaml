@@ -1,0 +1,32 @@
+seed: 7
+device: auto
+
+paths:
+  latent_root: data/latents
+  metadata_root: data/metadata
+  checkpoint_dir: checkpoints/ddpm
+  log_dir: outputs/logs
+
+data:
+  category: chair
+  split: train
+  batch_size: 4
+  num_workers: 0
+
+diffusion:
+  timesteps: 1000
+  sample_steps: 100
+  beta_start: 0.0001
+  beta_end: 0.02
+
+denoiser:
+  name: unet3d
+  latent_channels: 4
+  base_channels: 64
+  time_dim: 256
+
+training:
+  learning_rate: 0.0001
+  max_steps: 100000
+  save_every: 5000
+

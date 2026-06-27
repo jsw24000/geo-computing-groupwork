@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 from torch import nn
@@ -38,9 +39,9 @@ class TimeBlock3D(nn.Module):
 
 
 class UNet3D(nn.Module):
-    """Small 3D U-Net denoiser for latent DDPM smoke tests."""
+    """Small 3D U-Net denoiser for latent DDPM."""
 
-    def __init__(self, channels: int, base_channels: int = 16, time_dim: int = 64):
+    def __init__(self, channels: int, base_channels: int = 64, time_dim: int = 256):
         super().__init__()
         self.time_dim = time_dim
         self.time_mlp = nn.Sequential(
@@ -57,7 +58,13 @@ class UNet3D(nn.Module):
         self.out_block = TimeBlock3D(c * 2, c, time_dim)
         self.out = nn.Conv3d(c, channels, kernel_size=3, padding=1)
 
-    def forward(self, x: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        timesteps: torch.Tensor,
+        condition: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        del condition
         if timesteps.ndim == 0:
             timesteps = timesteps.expand(x.shape[0])
         emb = self.time_mlp(sinusoidal_embedding(timesteps, self.time_dim))

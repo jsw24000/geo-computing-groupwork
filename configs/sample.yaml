@@ -1,0 +1,25 @@
+seed: 7
+device: auto
+
+paths:
+  external_sdfusion: external/SDFusion
+  vqvae_checkpoint: checkpoints/sdfusion/vqvae-snet-all.pth
+  ddpm_checkpoint: checkpoints/ddpm/latest.pt
+  mesh_dir: outputs/meshes
+
+diffusion:
+  timesteps: 1000
+  sample_steps: 100
+  beta_start: 0.0001
+  beta_end: 0.02
+
+denoiser:
+  name: unet3d
+  latent_channels: 4
+  latent_shape: [4, 8, 8, 8]
+  base_channels: 64
+  time_dim: 256
+
+sampling:
+  batch_size: 1
+  output_name: sample_generated.ply

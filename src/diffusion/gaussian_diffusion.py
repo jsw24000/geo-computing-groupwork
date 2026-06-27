@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -45,20 +47,31 @@ class GaussianDiffusion3D(nn.Module):
             + extract(self.sqrt_one_minus_alpha_cumprod, timesteps, x_start) * noise
         )
 
-    def p_losses(self, x_start: torch.Tensor, timesteps: torch.Tensor) -> dict[str, torch.Tensor]:
+    def p_losses(
+        self,
+        x_start: torch.Tensor,
+        timesteps: torch.Tensor,
+        condition: dict[str, Any] | None = None,
+    ) -> dict[str, torch.Tensor]:
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start, timesteps, noise)
-        predicted_noise = self.model(x_noisy, timesteps)
+        predicted_noise = self.model(x_noisy, timesteps, condition=condition)
         loss = F.mse_loss(predicted_noise, noise)
         return {"loss": loss, "predicted_noise": predicted_noise, "noise": noise, "x_noisy": x_noisy}
 
     @torch.no_grad()
-    def p_sample(self, x: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+    def p_sample(
+        self,
+        x: torch.Tensor,
+        timesteps: torch.Tensor,
+        condition: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
         betas_t = extract(self.betas, timesteps, x)
         sqrt_one_minus_alpha_cumprod_t = extract(self.sqrt_one_minus_alpha_cumprod, timesteps, x)
         sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, timesteps, x)
 
-        model_mean = sqrt_recip_alphas_t * (x - betas_t * self.model(x, timesteps) / sqrt_one_minus_alpha_cumprod_t)
+        predicted_noise = self.model(x, timesteps, condition=condition)
+        model_mean = sqrt_recip_alphas_t * (x - betas_t * predicted_noise / sqrt_one_minus_alpha_cumprod_t)
         posterior_variance_t = extract(self.posterior_variance, timesteps, x)
 
         noise = torch.randn_like(x)
@@ -66,7 +79,13 @@ class GaussianDiffusion3D(nn.Module):
         return model_mean + nonzero_mask * torch.sqrt(posterior_variance_t) * noise
 
     @torch.no_grad()
-    def sample(self, shape: tuple[int, ...], device: torch.device, steps: int | None = None) -> torch.Tensor:
+    def sample(
+        self,
+        shape: tuple[int, ...],
+        device: torch.device,
+        steps: int | None = None,
+        condition: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
         x = torch.randn(shape, device=device)
         if steps is None or steps >= self.timesteps:
             schedule = range(self.timesteps - 1, -1, -1)
@@ -74,6 +93,5 @@ class GaussianDiffusion3D(nn.Module):
             schedule = torch.linspace(self.timesteps - 1, 0, steps, dtype=torch.long).tolist()
         for timestep in schedule:
             t = torch.full((shape[0],), int(timestep), device=device, dtype=torch.long)
-            x = self.p_sample(x, t)
+            x = self.p_sample(x, t, condition=condition)
         return x
-

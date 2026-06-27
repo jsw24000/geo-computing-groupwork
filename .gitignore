@@ -2,10 +2,21 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-data/raw/
-data/processed/
-data/latents/
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/sdf/
+data/processed/sdf/*
+!data/processed/sdf/.gitkeep
+data/latents/*
+!data/latents/.gitkeep
+data/metadata/*
+!data/metadata/.gitkeep
 outputs/
+external/SDFusion/
+checkpoints/**/*.pt
+checkpoints/**/*.pth
+checkpoints/**/*.ckpt
 
 # Reference PDFs are local reading material and should not be submitted as code.
 2505.19175v1.pdf

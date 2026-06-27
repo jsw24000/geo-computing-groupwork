@@ -1,0 +1,23 @@
+seed: 7
+device: auto
+
+paths:
+  external_sdfusion: external/SDFusion
+  vqvae_checkpoint: checkpoints/sdfusion/vqvae-snet-all.pth
+  shapenet_raw_root: data/raw/ShapeNetCore.v1
+  sdf_root: data/processed/sdf
+  latent_root: data/latents
+  metadata_root: data/metadata
+
+data:
+  category: chair
+  synset_id: "03001627"
+  resolution: 64
+  truncation: 0.2
+  split: train
+
+sdf_encoder_decoder:
+  name: sdfusion_vqvae
+  freeze: true
+  latent_channels: null
+  latent_resolution: null
