@@ -10,8 +10,12 @@ data/processed/sdf/*
 !data/processed/sdf/.gitkeep
 data/latents/*
 !data/latents/.gitkeep
+
+# Metadata manifests are small and should be versioned so teammates share
+# the same sample ids, split assignments, and processed SDF index.
 data/metadata/*
 !data/metadata/.gitkeep
+!data/metadata/*.jsonl
 outputs/
 external/SDFusion/
 checkpoints/**/*.pt

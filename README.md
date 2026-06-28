@@ -32,6 +32,35 @@ SDFusion 代码和权重作为外部资源使用，不直接混入本仓库核�
 
 `scripts/download_sdfusion_weights.py` 只预留下载和校验入口。具体下载链接、认证和文件名以后以 SDFusion 官方 README 为准。
 
+## 环境配置
+
+本项目推荐使用 Conda 虚拟环境管理依赖。`.env` 更适合存路径、密钥或本机配置变量，不适合管理 PyTorch、SciPy、scikit-image 这类二进制依赖。
+
+队友首次拿到项目后运行：
+
+```powershell
+conda env create -f environment.yml
+conda activate sdf-latent-diffusion
+```
+
+验证环境：
+
+```powershell
+python -c "import torch, scipy, skimage, yaml; print(torch.__version__); print(torch.cuda.is_available())"
+```
+
+`environment.yml` 是主环境文件，面向后续 DDPM 训练和 VQ-VAE 接入，包含 PyTorch、CUDA、SciPy、scikit-image、matplotlib 等依赖。
+
+如果只需要运行数据处理、SDF 切片预览或已有自己的 Python 环境，也可以使用 pip 备选：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+后续真正接入 SDFusion 官方代码时，如果官方仓库还有额外依赖，需要把缺失包继续合并进 `environment.yml`。
+
 ## 第一步：准备 ShapeNet chair 数据
 
 当前阶段只需要把 ShapeNet 的 chair 类别准备好，使下一步可以交给 SDFusion 做 SDF / TSDF 预处理。ShapeNet chair 对应的 WordNet synset id 是：
@@ -99,6 +128,78 @@ ShapeNetCore.v1/
 
 本项目的 `data/metadata/*.jsonl` 用于记录我们自己的样本索引和 train/val/test 划分；SDFusion 的 SDF 生成逻辑仍以官方代码为准。
 
+## 当前数据结构
+
+当前本机已经将 ShapeNet chair 原始数据放入 `data/raw/`，实际目录是：
+
+```text
+data/raw/
+  03001627.zip
+  03001627/
+    03001627/
+      <model_id>/
+        models/
+          model_normalized.obj
+          model_normalized.mtl
+          model_normalized.json
+          model_normalized.solid.binvox
+          model_normalized.surface.binvox
+```
+
+其中 `model_normalized.obj` 是原始网格；`model_normalized.solid.binvox` 是实心 occupancy 体素，本项目当前用它计算 SDF。少数样本缺少 `solid.binvox`，预处理时会跳过。
+
+原始样本索引位于：
+
+```text
+data/metadata/shapenet_chair_all.jsonl
+data/metadata/shapenet_chair_train.jsonl
+data/metadata/shapenet_chair_val.jsonl
+data/metadata/shapenet_chair_test.jsonl
+```
+
+每一行记录一个样本的类别、ShapeNet synset id、model id、split、原始 mesh 路径。当前划分数量为：
+
+```text
+all:   6778
+train: 6118
+val:   333
+test:  327
+```
+
+SDF 预处理产物放在：
+
+```text
+data/processed/sdf/train/<model_id>.pt
+data/processed/sdf/val/<model_id>.pt
+data/processed/sdf/test/<model_id>.pt
+```
+
+`.pt` 文件中核心字段是 `sdf`，形状为 `[1, 64, 64, 64]`，符号约定为：
+
+```text
+inside:  negative
+surface: near zero
+outside: positive
+```
+
+当前有效 SDF 数量为：
+
+```text
+train: 6116
+val:   332
+test:  327
+```
+
+对应的 SDF 索引位于：
+
+```text
+data/metadata/sdf_chair_train.jsonl
+data/metadata/sdf_chair_val.jsonl
+data/metadata/sdf_chair_test.jsonl
+```
+
+后续 VQ-VAE encoder 应优先读取 `sdf_chair_<split>.jsonl`，再根据其中的 `sdf_path` 加载 `.pt` 文件。
+
 ## SDF 编码/解码器包装层
 
 `src/sdf_encoder_decoder/` 是本项目写给 SDFusion VQ-VAE 的包装层。它的目的不是复制 SDFusion 官方代码，而是把外部项目里可能比较复杂的模型构建、checkpoint 加载和函数命名，统一包装成项目内部容易使用的接口：
@@ -153,6 +254,8 @@ scripts/
   download_sdfusion_weights.py
   prepare_shapenet_chair.py
   preprocess_sdf.py
+  preview_sdf_mesh.py
+  export_sdf_mesh.py
   encode_latents.py
   train_ddpm.py
   sample_ddpm.py
@@ -245,10 +348,42 @@ python scripts/download_sdfusion_weights.py --target checkpoints/sdfusion/vqvae-
 ### 预处理 SDF
 
 ```powershell
-python scripts/preprocess_sdf.py --config configs/vqvae_sdfusion.yaml
+python scripts/preprocess_sdf.py --config configs/vqvae_sdfusion.yaml --split train
+python scripts/preprocess_sdf.py --config configs/vqvae_sdfusion.yaml --split val
+python scripts/preprocess_sdf.py --config configs/vqvae_sdfusion.yaml --split test
 ```
 
-用于后续实现 mesh 到 SDF / TSDF 的预处理。当前保留接口，不声称已经完成 ShapeNet 预处理。
+当前脚本会读取 `data/metadata/shapenet_chair_<split>.jsonl`，找到每个样本的 `model_normalized.solid.binvox`，通过 occupancy distance transform 生成截断 SDF，并保存到 `data/processed/sdf/<split>/`。
+
+小样本测试：
+
+```powershell
+python scripts/preprocess_sdf.py --config configs/vqvae_sdfusion.yaml --split train --limit 10
+```
+
+强制重新生成已有 SDF：
+
+```powershell
+python scripts/preprocess_sdf.py --config configs/vqvae_sdfusion.yaml --split train --overwrite
+```
+
+### 可视化 SDF
+
+切片预览：
+
+```powershell
+python scripts/preview_sdf_mesh.py --manifest data/metadata/sdf_chair_train.jsonl --limit 5
+```
+
+输出到 `outputs/figures/sdf_preview/`。图中红色表示外部正值，蓝色表示内部负值，黑线是 `SDF=0` 的表面轮廓。
+
+导出 Marching Cubes mesh：
+
+```powershell
+python scripts/export_sdf_mesh.py --manifest data/metadata/sdf_chair_train.jsonl --limit 5
+```
+
+输出到 `outputs/meshes/sdf_export/`。如果当前 Python 环境缺少 `skimage`，需要先按 `environment.yml` 建好 Conda 环境，或使用已经安装 `scikit-image` 的 Python 解释器运行。
 
 ### 提取 latent
 
@@ -277,8 +412,8 @@ python scripts/sample_ddpm.py --config configs/sample.yaml --checkpoint checkpoi
 ## 后续任务分工建议
 
 - VQ-VAE 接入：实现 `src/sdf_encoder_decoder/sdfusion_vqvae.py`，适配 SDFusion 官方模型加载、`encode`、`decode`。
-- 数据预处理：实现 `scripts/preprocess_sdf.py` 和 `src/data/shapenet.py`，生成统一 SDF / TSDF 数据。
-- Latent cache：实现 `src/pipelines/encode_latents.py`，保存 latent 和元数据。
+- 数据预处理：当前已支持从 `solid.binvox` 生成 SDF；后续如果改为从 mesh 直接计算 SDF 或复用 SDFusion 官方预处理，需要保持 `data/metadata/sdf_chair_<split>.jsonl` 的接口稳定。
+- Latent cache：实现 `scripts/encode_latents.py` 或对应 pipeline，读取 `data/metadata/sdf_chair_<split>.jsonl`，保存 latent 和元数据。
 - DDPM 训练：完善 `src/pipelines/train_ddpm.py`，支持断点保存、日志和 batch 训练。
 - 条件生成：在 `src/conditioning/` 中逐步加入类别、文本、图像或 partial-shape 条件。
 

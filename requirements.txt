@@ -1,0 +1,8 @@
+numpy>=1.24,<2
+scipy>=1.10
+PyYAML>=6
+matplotlib>=3.7
+pillow>=10
+scikit-image>=0.22
+tqdm>=4.66
+torch>=2.1
