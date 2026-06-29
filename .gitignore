@@ -29,6 +29,11 @@ Octree-GS.pdf
 papers/*.pdf
 references/*.pdf
 
+test_vqvae_results/
+
 *.pt
 *.pth
 *.ckpt
+
+data/processed.zip
+*.zip

@@ -45,6 +45,11 @@ ShapeNet / TSDF
 
 DDPM 只训练 denoiser，不训练 SDFusion VQ-VAE。VQ-VAE 默认 `eval()`，参数冻结。
 
+### VQ-VAE 接口说明
+- **提取 Latent 时**：必须显式调用 `vqvae(sdf_tensor, forward_no_quant=True, encode_only=True)`。
+  - *原因*：该分支会跳过离散量化，直接吐出连续型的 `float32` 隐空间特征。这是 3D U-Net 扩散模型训练最喜爱的连续数学空间。
+- **最终组装解码时**：必须显式调用 `vqvae.decode_no_quant(sampled_latent)`。
+
 ## AI 编程要求
 
 - 修改前先读相关文件，不凭文件名猜测行为。
@@ -57,7 +62,7 @@ DDPM 只训练 denoiser，不训练 SDFusion VQ-VAE。VQ-VAE 默认 `eval()`，�
 
 ## 当前交接状态
 
-当前项目已经完成框架搭建和 ShapeNet chair 数据预处理链路的一部分：
+当前项目已经完成框架搭建、 ShapeNet chair 数据预处理链路的一部分以及VQVAE部分的实现：
 
 - 原始 chair 数据在 `data/raw/03001627/03001627/<model_id>/models/`，但 `data/raw/` 不应提交。
 - 原始样本索引在 `data/metadata/shapenet_chair_*.jsonl`，这些 metadata 应提交。
@@ -76,6 +81,11 @@ test:  327
 ```
 
 少数样本缺少 `model_normalized.solid.binvox` 已被跳过，不要在没有数据来源的情况下伪造这些样本。
+
+### 隐空间特征（Latent Cache）标准规格
+经本地测试，数据过完 VQ-VAE Encoder 后的标准规格如下：
+- **物理形状**： `[B, 3, 16, 16, 16]`。
+- **3D U-Net 对齐**：下游同学设计 Denoiser 时，其输入通道数（`in_channels`）设为 **3**，预测噪声输出形状同样为 `[B, 3, 16, 16, 16]`。
 
 ## 下一阶段 AI Agent 注意事项
 
@@ -106,9 +116,5 @@ test:  327
 - 当前结果是接口验证、调参结果，还是可用于报告的正式结果
 
 ## 文件命名
-
-- DDPM 训练入口使用 `train_ddpm.py`。
-- 采样入口使用 `sample_ddpm.py`。
-- latent 提取入口使用 `encode_latents.py`。
-- 外部权重下载或校验入口使用 `download_sdfusion_weights.py`。
-- 不再使用 `train_vae.py`、`smoke_test.py`、`smoke.yaml`。
+- latent提取：`extract_latent.py`
+- vqvae测试：`test_my_vqvae.py`
