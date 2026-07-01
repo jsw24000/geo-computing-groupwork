@@ -16,6 +16,7 @@ from src.utils.config import ensure_dirs, load_config
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Preprocess meshes into SDF/TSDF grids.")
     parser.add_argument("--config", default="configs/vqvae_sdfusion.yaml")
+    parser.add_argument("--category", default=None, help="Category to process. Defaults to config data.category.")
     parser.add_argument("--split", default=None, help="Dataset split to process. Defaults to config data.split.")
     parser.add_argument("--limit", type=int, default=None, help="Optional small subset size for a smoke test.")
     parser.add_argument("--overwrite", action="store_true", help="Regenerate existing SDF files.")
@@ -41,7 +42,7 @@ def _manifest_path(metadata_root: Path, category: str, split: str) -> Path:
 
 def _load_manifest(path: Path) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8-sig") as handle:
         for line in handle:
             line = line.strip()
             if line:
@@ -77,8 +78,8 @@ def _occupancy_to_sdf(occupancy: np.ndarray, truncation: float) -> np.ndarray:
     return sdf
 
 
-def _output_path(sdf_root: Path, split: str, model_id: str) -> Path:
-    return sdf_root / split / f"{model_id}.pt"
+def _output_path(sdf_root: Path, category: str, split: str, model_id: str) -> Path:
+    return sdf_root / category / split / f"{model_id}.pt"
 
 
 def _project_relative(path: Path) -> str:
@@ -121,7 +122,7 @@ def main() -> None:
     ensure_dirs(sdf_root, metadata_root)
 
     data_cfg = config["data"]
-    category = str(data_cfg.get("category", "chair"))
+    category = args.category or str(data_cfg.get("category", "chair"))
     split = args.split or str(data_cfg.get("split", "train"))
     resolution = int(data_cfg.get("resolution", 64))
     truncation = float(data_cfg.get("truncation", 0.2))
@@ -136,14 +137,17 @@ def main() -> None:
     if args.limit is not None:
         records = records[: args.limit]
 
-    processed_manifest = metadata_root / f"sdf_{category}_{split}.jsonl"
+    manifest_stem = f"sdf_{category}_{split}"
+    if args.limit is not None:
+        manifest_stem = f"{manifest_stem}_limit{args.limit}"
+    processed_manifest = metadata_root / f"{manifest_stem}.jsonl"
     converted = 0
     skipped = 0
     failed = 0
     with processed_manifest.open("w", encoding="utf-8") as manifest_handle:
         for index, record in enumerate(records, start=1):
             model_id = record["model_id"]
-            output_path = _output_path(sdf_root, split, model_id)
+            output_path = _output_path(sdf_root, category, split, model_id)
             if output_path.exists() and not args.overwrite:
                 skipped += 1
             else:
@@ -161,7 +165,7 @@ def main() -> None:
                     continue
 
             manifest_payload = {
-                "category": record["category"],
+                "category": record.get("category", category),
                 "synset_id": record["synset_id"],
                 "model_id": model_id,
                 "split": split,
@@ -178,7 +182,7 @@ def main() -> None:
                 )
 
     print(f"processed manifest: {processed_manifest}")
-    print(f"sdf root: {sdf_root / split}")
+    print(f"sdf root: {sdf_root / category / split}")
     print(f"done: converted={converted}, skipped={skipped}, failed={failed}")
 
 

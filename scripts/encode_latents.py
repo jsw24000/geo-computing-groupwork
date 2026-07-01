@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
         description="Encode preprocessed SDF grids with the frozen VQ-VAE and save latent cache."
     )
     parser.add_argument("--config", default="configs/vqvae_sdfusion.yaml")
+    parser.add_argument("--category", default=None, help="Category to encode. Defaults to config data.category.")
     parser.add_argument("--split", default="train", choices=["train", "val", "test"])
     parser.add_argument("--checkpoint", default=None, help="Override VQ-VAE checkpoint path")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of samples (for testing)")
@@ -69,6 +70,7 @@ def main() -> None:
 
     checkpoint_path = project_path(args.checkpoint or paths["vqvae_checkpoint"])
     encoder_decoder_name = config["sdf_encoder_decoder"]["name"]
+    category = args.category or str(config.get("data", {}).get("category", "chair"))
 
     # Load VQ-VAE adapter
     print(f"[*] Loading VQ-VAE from checkpoint: {checkpoint_path}")
@@ -82,19 +84,19 @@ def main() -> None:
     print("[+] VQ-VAE loaded and frozen.")
 
     # Read SDF metadata for this split
-    manifest_path = metadata_root / f"sdf_chair_{args.split}.jsonl"
+    manifest_path = metadata_root / f"sdf_{category}_{args.split}.jsonl"
     if not manifest_path.exists():
         raise FileNotFoundError(f"SDF manifest not found: {manifest_path}")
 
-    with open(manifest_path, "r", encoding="utf-8") as f:
+    with open(manifest_path, "r", encoding="utf-8-sig") as f:
         entries = [json.loads(line) for line in f if line.strip()]
 
     if args.limit is not None:
         entries = entries[: args.limit]
 
-    print(f"[*] Processing {len(entries)} samples from {args.split} split ...")
+    print(f"[*] Processing {len(entries)} {category} samples from {args.split} split ...")
 
-    latent_split_dir = latent_root / args.split
+    latent_split_dir = latent_root / category / args.split
     latent_split_dir.mkdir(parents=True, exist_ok=True)
 
     success = 0
@@ -143,7 +145,7 @@ def main() -> None:
         # Save as LatentRecord
         record = LatentRecord(
             latent=latent_compact,
-            category=entry.get("category", "chair"),
+            category=entry.get("category", category),
             model_id=model_id,
             sdf_path=str(sdf_path),
             encoder_decoder_name=encoder_decoder_name,

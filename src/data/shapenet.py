@@ -17,7 +17,11 @@ class ShapeNetConfig:
 
 
 SHAPENET_SYNSET_IDS = {
+    "airplane": "02691156",
+    "car": "02958343",
     "chair": "03001627",
+    "rifle": "04090263",
+    "table": "04379243",
 }
 
 
@@ -43,15 +47,22 @@ def resolve_category_root(source_root: str | Path, category: str = "chair") -> P
     source_root = Path(source_root)
     synset_id = category_to_synset_id(category)
     if source_root.name == synset_id:
+        nested_category_root = source_root / synset_id
+        if nested_category_root.exists():
+            return nested_category_root
         return source_root
 
     category_root = source_root / synset_id
     if category_root.exists():
+        nested_category_root = category_root / synset_id
+        if nested_category_root.exists():
+            return nested_category_root
         return category_root
 
     raise FileNotFoundError(
         f"Cannot find ShapeNet category folder '{synset_id}' under {source_root}. "
-        "Download and extract ShapeNetCore.v1 first; chair corresponds to synset 03001627."
+        "Download and extract ShapeNetCore.v1 first, then pass either the dataset root "
+        "or the category synset folder."
     )
 
 
