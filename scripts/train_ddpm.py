@@ -164,8 +164,7 @@ def main() -> None:
                 f"val_loss: {val_loss:.6f} | best: {best_val_loss:.6f}"
             )
 
-            # Save checkpoint
-            ckpt_path = checkpoint_dir / f"ddpm_step{step:06d}.pt"
+            # Save checkpoint (only latest.pt + best.pt to save disk space)
             ckpt_payload = {
                 "step": step,
                 "denoiser": denoiser.state_dict(),
@@ -176,10 +175,15 @@ def main() -> None:
                 "config": config,
                 "latent_stats": stats,
             }
-            torch.save(ckpt_payload, ckpt_path)
-            # Also save as "latest.pt" for easy resume
-            torch.save(ckpt_payload, checkpoint_dir / "latest.pt")
-            pbar.write(f"  [*] Checkpoint saved: {ckpt_path}")
+            latest_path = checkpoint_dir / "latest.pt"
+            torch.save(ckpt_payload, latest_path)
+
+            if val_loss == best_val_loss:
+                best_path = checkpoint_dir / "best.pt"
+                torch.save(ckpt_payload, best_path)
+                pbar.write(f"  [*] Checkpoint saved: {latest_path} (best so far)")
+            else:
+                pbar.write(f"  [*] Checkpoint saved: {latest_path}")
 
     pbar.close()
     elapsed = time.time() - start_time
