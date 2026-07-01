@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -12,6 +13,16 @@ def extract(values: torch.Tensor, timesteps: torch.Tensor, target: torch.Tensor)
     return out.view(timesteps.shape[0], *((1,) * (target.ndim - 1)))
 
 
+def cosine_betas(timesteps: int, max_beta: float = 0.02) -> torch.Tensor:
+    """Cosine beta schedule as proposed in 'Improved DDPM'."""
+    s = 0.008
+    t = torch.linspace(0, timesteps, timesteps + 1, dtype=torch.float32)
+    f_t = torch.cos((t / timesteps + s) / (1 + s) * math.pi / 2) ** 2
+    alpha_cumprod = f_t / f_t[0]
+    betas = torch.clamp(1 - alpha_cumprod[1:] / alpha_cumprod[:-1], max=max_beta)
+    return betas
+
+
 class GaussianDiffusion3D(nn.Module):
     def __init__(
         self,
@@ -19,12 +30,16 @@ class GaussianDiffusion3D(nn.Module):
         timesteps: int = 100,
         beta_start: float = 1e-4,
         beta_end: float = 0.02,
+        schedule: str = "linear",
     ):
         super().__init__()
         self.model = model
         self.timesteps = timesteps
 
-        betas = torch.linspace(beta_start, beta_end, timesteps, dtype=torch.float32)
+        if schedule == "cosine":
+            betas = cosine_betas(timesteps)
+        else:
+            betas = torch.linspace(beta_start, beta_end, timesteps, dtype=torch.float32)
         alphas = 1.0 - betas
         alpha_cumprod = torch.cumprod(alphas, dim=0)
         alpha_cumprod_prev = torch.cat([torch.ones(1), alpha_cumprod[:-1]], dim=0)
@@ -94,4 +109,65 @@ class GaussianDiffusion3D(nn.Module):
         for timestep in schedule:
             t = torch.full((shape[0],), int(timestep), device=device, dtype=torch.long)
             x = self.p_sample(x, t, condition=condition)
+        return x
+
+    @torch.no_grad()
+    def ddim_sample(
+        self,
+        shape: tuple[int, ...],
+        device: torch.device,
+        steps: int = 100,
+        eta: float = 0.0,
+        condition: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        """DDIM sampling — deterministic reverse process.
+
+        Uses the non-Markovian DDIM formulation (Song et al., 2020).
+        With eta=0 this is fully deterministic; eta=1 adds DDPM-like noise.
+
+        Key advantage over DDPM `sample()`: naturally handles non-consecutive
+        timesteps without approximation error.
+        """
+        x = torch.randn(shape, device=device)
+        schedule = torch.linspace(self.timesteps - 1, 0, steps, dtype=torch.long, device=device)
+
+        for i in range(len(schedule) - 1):
+            t = schedule[i]
+            t_next = schedule[i + 1]
+            t_tensor = t.expand(shape[0])
+
+            predicted_noise = self.model(x, t_tensor, condition=condition)
+
+            # alpha_cumprod[t] is the cumulative product at step t
+            alpha_cumprod_t = extract(self.alpha_cumprod, t_tensor, x)
+            alpha_cumprod_t_next = extract(
+                self.alpha_cumprod,
+                t_next.clamp(min=0).expand(shape[0]),
+                x,
+            )
+
+            # sqrt with numerical protection
+            sqrt_ac_t = torch.sqrt(alpha_cumprod_t.clamp(min=1e-6))
+            sqrt_one_minus_ac_t = torch.sqrt((1.0 - alpha_cumprod_t).clamp(min=0.0))
+
+            # Predict x0: (x_t - sqrt(1-ᾱₜ) * ε) / sqrt(ᾱₜ)
+            x0_pred = (x - sqrt_one_minus_ac_t * predicted_noise) / sqrt_ac_t
+
+            # DDIM step (eta=0 is fully deterministic):
+            # x_{t_next} = sqrt(ᾱ_{t_next}) * x0_pred + sqrt(1-ᾱ_{t_next}) * ε
+            sqrt_ac_next = torch.sqrt(alpha_cumprod_t_next.clamp(min=0.0))
+            sqrt_one_minus_ac_next = torch.sqrt((1.0 - alpha_cumprod_t_next).clamp(min=0.0))
+
+            if eta == 0.0:
+                # Pure DDIM (deterministic)
+                x = sqrt_ac_next * x0_pred + sqrt_one_minus_ac_next * predicted_noise
+            else:
+                # Stochastic DDIM with noise
+                sigma = eta * torch.sqrt(
+                    (1.0 - alpha_cumprod_t_next) / (1.0 - alpha_cumprod_t).clamp(min=1e-8)
+                    * (1.0 - alpha_cumprod_t / alpha_cumprod_t_next.clamp(min=1e-8))
+                )
+                x = sqrt_ac_next * x0_pred + torch.sqrt(sqrt_one_minus_ac_next.pow(2) - sigma.pow(2)).clamp(min=0) * predicted_noise
+                x += sigma * torch.randn_like(x)
+
         return x
