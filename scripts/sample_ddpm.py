@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import re
+from pathlib import Path
 
 import torch
 
@@ -20,7 +22,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vqvae_checkpoint", default=None, help="Override VQ-VAE checkpoint path")
     parser.add_argument("--ddim", action="store_true", default=False, help="Use DDIM sampling")
     parser.add_argument("--sample_steps", type=int, default=None, help="Override sampling steps")
+    parser.add_argument("--count", type=int, default=1, help="Number of chairs to generate (auto-increment filenames)")
     return parser.parse_args()
+
+
+def get_next_index(mesh_dir: Path, prefix: str = "sample_generated") -> int:
+    """Find the next index for naming: scan existing sample_generated_xxx.ply files."""
+    pattern = re.compile(re.escape(prefix) + r"_(\d+)\.ply$")
+    max_idx = 0
+    for f in mesh_dir.glob(f"{prefix}_*.ply"):
+        m = pattern.match(f.name)
+        if m:
+            idx = int(m.group(1))
+            if idx > max_idx:
+                max_idx = idx
+    return max_idx + 1
 
 
 def main() -> None:
@@ -35,6 +51,7 @@ def main() -> None:
     denoiser_cfg = config["denoiser"]
     diff_cfg = config["diffusion"]
     latent_shape = tuple(int(v) for v in denoiser_cfg["latent_shape"])
+    count = max(1, args.count)
 
     # --- Build denoiser ---
     denoiser = UNet3D(
@@ -75,45 +92,54 @@ def main() -> None:
         freeze=True,
     ).to(device)
 
-    # --- Sample ---
-    batch_size = int(config["sampling"]["batch_size"])
+    # --- Determine output numbering ---
+    start_idx = get_next_index(mesh_dir)
     sample_steps = args.sample_steps or int(diff_cfg.get("sample_steps", 100))
-    print(f"[*] Sampling {batch_size} latent(s) of shape {latent_shape} with {sample_steps} steps ...")
-    print(f"    Method: {'DDIM' if args.ddim else 'DDPM'}")
+    method_name = "DDIM" if args.ddim else "DDPM"
 
-    with torch.no_grad():
-        if args.ddim:
-            latent = diffusion.ddim_sample(
-                (batch_size, *latent_shape),
-                device=device,
-                steps=sample_steps,
-                eta=0.0,
-            )
-        else:
-            latent = diffusion.sample(
-                (batch_size, *latent_shape),
-                device=device,
-                steps=sample_steps,
-            )
-    print(f"[+] Sampled latent shape: {latent.shape}, mean={latent.mean():.4f}, std={latent.std():.4f}")
+    print(f"[*] Generating {count} chair(s) with {method_name} ({sample_steps} steps)")
+    print(f"    Files will start from {start_idx}")
 
-    # Reverse latent normalization
-    if latent_stats is not None:
-        latent = latent * latent_stats["std"] + latent_stats["mean"]
-        print(f"[*] After reverse norm: mean={latent.mean():.4f}, std={latent.std():.4f}")
+    for i in range(count):
+        current_idx = start_idx + i
+        print(f"\n{'='*50}")
+        print(f"  Sample {i+1}/{count} → sample_generated_{current_idx:03d}.ply")
+        print(f"{'='*50}")
 
-    # --- Decode to SDF ---
-    print("[*] Decoding latent through VQ-VAE ...")
-    with torch.no_grad():
-        sdf = encoder_decoder.decode(latent)
-    print(f"[+] Decoded SDF shape: {sdf.shape}, range=[{sdf.min():.3f}, {sdf.max():.3f}]")
+        # --- Sample one latent ---
+        with torch.no_grad():
+            if args.ddim:
+                latent = diffusion.ddim_sample(
+                    (1, *latent_shape),  # batch_size=1 for individual numbering
+                    device=device,
+                    steps=sample_steps,
+                    eta=0.0,
+                )
+            else:
+                latent = diffusion.sample(
+                    (1, *latent_shape),
+                    device=device,
+                    steps=sample_steps,
+                )
+        print(f"    latent: mean={latent.mean():.4f}, std={latent.std():.4f}")
 
-    # --- Export mesh ---
-    output_name = config["sampling"].get("output_name", "sample_generated.ply")
-    mesh_path = mesh_dir / output_name
-    sdf_np = sdf.detach().cpu().numpy()[0, 0]  # [D, H, W]
-    sdf_to_mesh(sdf_np, str(mesh_path))
-    print(f"[###] Generated mesh saved to: {mesh_path}")
+        # Reverse latent normalization
+        if latent_stats is not None:
+            latent = latent * latent_stats["std"] + latent_stats["mean"]
+
+        # --- Decode to SDF ---
+        with torch.no_grad():
+            sdf = encoder_decoder.decode(latent)
+        print(f"    SDF: shape={sdf.shape}, range=[{sdf.min():.3f}, {sdf.max():.3f}]")
+
+        # --- Export mesh ---
+        output_name = f"sample_generated_{current_idx:03d}.ply"
+        mesh_path = mesh_dir / output_name
+        sdf_np = sdf.detach().cpu().numpy()[0, 0]  # [D, H, W]
+        sdf_to_mesh(sdf_np, str(mesh_path))
+        print(f"    [###] Saved: {mesh_path}")
+
+    print(f"\n[###] All {count} samples generated in: {mesh_dir}")
 
 
 if __name__ == "__main__":
