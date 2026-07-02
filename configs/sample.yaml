@@ -1,5 +1,5 @@
 seed: 7
-device: auto
+device: cpu 
 
 paths:
   external_sdfusion: external/SDFusion
