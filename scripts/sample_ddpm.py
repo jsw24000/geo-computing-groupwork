@@ -23,11 +23,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ddim", action="store_true", default=False, help="Use DDIM sampling")
     parser.add_argument("--sample_steps", type=int, default=None, help="Override sampling steps")
     parser.add_argument("--count", type=int, default=1, help="Number of chairs to generate (auto-increment filenames)")
+    parser.add_argument("--category", default=None, help="Category (e.g. chair, table, car). Scopes checkpoint and output paths.")
     return parser.parse_args()
 
 
-def get_next_index(mesh_dir: Path, prefix: str = "sample_generated") -> int:
-    """Find the next index for naming: scan existing sample_generated_xxx.ply files."""
+def get_next_index(mesh_dir: Path, prefix: str) -> int:
+    """Find the next index for naming: scan existing {prefix}_xxx.ply files."""
     pattern = re.compile(re.escape(prefix) + r"_(\d+)\.ply$")
     max_idx = 0
     for f in mesh_dir.glob(f"{prefix}_*.ply"):
@@ -45,13 +46,21 @@ def main() -> None:
     seed_everything(int(config.get("seed", 7)))
     device = resolve_device(config.get("device", "auto"))
     paths = config["paths"]
+
+    # Resolve category
+    category = args.category or config.get("data", {}).get("category", None)
+
+    # Scope mesh and checkpoint paths by category
     mesh_dir = project_path(paths.get("mesh_dir", "outputs/meshes"))
+    if category:
+        mesh_dir = mesh_dir / category
     ensure_dirs(mesh_dir)
 
     denoiser_cfg = config["denoiser"]
     diff_cfg = config["diffusion"]
     latent_shape = tuple(int(v) for v in denoiser_cfg["latent_shape"])
     count = max(1, args.count)
+    category_label = category or "chair"
 
     # --- Build denoiser ---
     denoiser = UNet3D(
@@ -60,8 +69,14 @@ def main() -> None:
         time_dim=int(denoiser_cfg["time_dim"]),
     ).to(device)
 
-    # Load DDPM checkpoint
-    ddpm_checkpoint_path = project_path(args.ddpm_checkpoint or paths["ddpm_checkpoint"])
+    # Resolve DDPM checkpoint path (with category scoping)
+    ddpm_checkpoint_path = args.ddpm_checkpoint
+    if ddpm_checkpoint_path is None:
+        ddpm_checkpoint_path = paths["ddpm_checkpoint"]
+        if category:
+            ddpm_checkpoint_path = str(Path(paths["ddpm_checkpoint"]).parent / category / Path(paths["ddpm_checkpoint"]).name)
+    ddpm_checkpoint_path = project_path(ddpm_checkpoint_path)
+
     if not ddpm_checkpoint_path.exists():
         raise FileNotFoundError(f"DDPM checkpoint not found: {ddpm_checkpoint_path}")
     print(f"[*] Loading DDPM checkpoint: {ddpm_checkpoint_path}")
@@ -93,24 +108,25 @@ def main() -> None:
     ).to(device)
 
     # --- Determine output numbering ---
-    start_idx = get_next_index(mesh_dir)
+    file_prefix = f"{category_label}_generated"
+    start_idx = get_next_index(mesh_dir, prefix=file_prefix)
     sample_steps = args.sample_steps or int(diff_cfg.get("sample_steps", 100))
     method_name = "DDIM" if args.ddim else "DDPM"
 
-    print(f"[*] Generating {count} chair(s) with {method_name} ({sample_steps} steps)")
+    print(f"[*] Generating {count} {category_label}(s) with {method_name} ({sample_steps} steps)")
     print(f"    Files will start from {start_idx}")
 
     for i in range(count):
         current_idx = start_idx + i
         print(f"\n{'='*50}")
-        print(f"  Sample {i+1}/{count} → sample_generated_{current_idx:03d}.ply")
+        print(f"  Sample {i+1}/{count} → {category_label}/{category_label}_generated_{current_idx:03d}.ply")
         print(f"{'='*50}")
 
         # --- Sample one latent ---
         with torch.no_grad():
             if args.ddim:
                 latent = diffusion.ddim_sample(
-                    (1, *latent_shape),  # batch_size=1 for individual numbering
+                    (1, *latent_shape),
                     device=device,
                     steps=sample_steps,
                     eta=0.0,
@@ -133,9 +149,9 @@ def main() -> None:
         print(f"    SDF: shape={sdf.shape}, range=[{sdf.min():.3f}, {sdf.max():.3f}]")
 
         # --- Export mesh ---
-        output_name = f"sample_generated_{current_idx:03d}.ply"
+        output_name = f"{category_label}_generated_{current_idx:03d}.ply"
         mesh_path = mesh_dir / output_name
-        sdf_np = sdf.detach().cpu().numpy()[0, 0]  # [D, H, W]
+        sdf_np = sdf.detach().cpu().numpy()[0, 0]
         sdf_to_mesh(sdf_np, str(mesh_path))
         print(f"    [###] Saved: {mesh_path}")
 

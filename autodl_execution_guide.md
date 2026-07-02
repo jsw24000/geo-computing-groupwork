@@ -262,47 +262,61 @@ python -c "import torch; print(torch.__version__); print(torch.cuda.is_available
 ### 3.2 Step 1：提取 Latent Cache
 
 **作用**：用冻结的 VQ-VAE 将所有 SDF 文件编码为 latent 特征，供 DDPM 训练使用。
+支持多类别（chair、table、car 等），每个类别单独存放。
 
 ```bash
-# 提取训练集 latent
+# 提取 chair 训练集 latent
 python scripts/encode_latents.py \
     --config configs/vqvae_sdfusion.yaml \
     --checkpoint saved_ckpt/vqvae-snet-all.pth \
-    --split train
+    --category chair --split train
 
-# 提取验证集 latent
+# 提取 chair 验证集 latent
 python scripts/encode_latents.py \
     --config configs/vqvae_sdfusion.yaml \
     --checkpoint saved_ckpt/vqvae-snet-all.pth \
-    --split val
+    --category chair --split val
 
-# 提取测试集 latent（可选，采样时用不到）
-python scripts/encode_latents.py \
-    --config configs/vqvae_sdfusion.yaml \
-    --checkpoint saved_ckpt/vqvae-snet-all.pth \
-    --split test
+# 提取 table/car 同理
+python scripts/encode_latents.py ... --category table --split train
+python scripts/encode_latents.py ... --category car --split train
 ```
 
-**耗时**：GPU 上约 5-10 分钟（CPU 上 ~75 分钟）
+**耗时**：GPU 上约 5-10 分钟/类别（CPU 上 ~75 分钟）
 
-**输出**：
+**输出目录结构**：
 ```
-data/latents/train/<model_id>.pt  × 6116  （每文件 ~6KB，合计 ~40MB）
-data/latents/val/<model_id>.pt    × 332
-data/latents/test/<model_id>.pt   × 327
+data/latents/{category}/
+  ├── train/<model_id>.pt    × N
+  ├── val/<model_id>.pt      × N
+  └── stats.json                    ← 该类别的 mean/std
 ```
 
 每个 `.pt` 文件包含 `LatentRecord` 字典：
 - `latent`: `[3, 16, 16, 16]` float32 张量
-- `category`: "chair"
+- `category`: "chair" / "table" / "car"
 - `model_id`: ShapeNet 模型 ID
 - `sdf_path`, `encoder_decoder_name`, `encoder_decoder_checkpoint`: 元数据
 
 ### 3.3 Step 2：训练 DDPM
 
+每个类别训练自己独立的 DDPM。通过 `--category` 指定目标类别：
+
 ```bash
-python scripts/train_ddpm.py --config configs/train_ddpm.yaml
+# 训练 chair
+python scripts/train_ddpm.py --config configs/train_ddpm.yaml --category chair
+
+# 训练 table
+python scripts/train_ddpm.py --config configs/train_ddpm.yaml --category table
+
+# 训练 car
+python scripts/train_ddpm.py --config configs/train_ddpm.yaml --category car
 ```
+
+**路径组织**：
+- Latent 读取：`data/latents/{category}/{split}/*.pt`
+- Checkpoint 保存：`checkpoints/ddpm/{category}/latest.pt` + `best.pt`
+- 日志保存：`outputs/logs/{category}/train_log.jsonl`
 
 **训练配置**（`configs/train_ddpm.yaml`）：
 
@@ -319,8 +333,8 @@ python scripts/train_ddpm.py --config configs/train_ddpm.yaml
 | **max_steps** | **200000** | 更大模型需更多训练 |
 | save_every | 5000 | 每 N 步保存 checkpoint |
 
-**Latent 归一化**：训练脚本自动加载 `data/latents/stats.json` 中的 mean/std，
-将 latent 标准化到 N(0,1) 再训练，采样后自动反归一化还原。
+**Latent 归一化**：训练脚本自动加载 `data/latents/{category}/stats.json` 中的 mean/std，
+将 latent 标准化到 N(0,1) 再训练。采样时从 checkpoint 读取 stats 自动反归一化。
 
 **训练过程**：
 ```
@@ -336,32 +350,37 @@ Training: 100%|████████████████████| 200
 ```
 
 - loss 预期从 ~1.0 开始，下降到 ~0.01~0.001
-- log 文件保存在 `outputs/logs/train_log.jsonl`
-- checkpoint 保存在 `checkpoints/ddpm/ddpm_step*.pt`（每 5000 步 + latest.pt）
+- log 文件保存在 `outputs/logs/{category}/train_log.jsonl`
+- checkpoint 保存在 `checkpoints/ddpm/{category}/latest.pt`（每 5000 步覆盖更新 + best.pt）
 
 **断点续训**：
 ```bash
-python scripts/train_ddpm.py --config configs/train_ddpm.yaml --resume checkpoints/ddpm/latest.pt
+python scripts/train_ddpm.py --config configs/train_ddpm.yaml --category chair --resume checkpoints/ddpm/chair/latest.pt
 ```
 
 **显存估算**：batch_size=4 时约 2-3GB，AutoDL 上完全没问题。
 
-### 3.4 Step 3：采样生成 Chair
+### 3.4 Step 3：采样生成
 
 ```bash
-# 使用最新 checkpoint 生成（DDPM 采样）
+# 使用 DDIM 采样（推荐），通过 --category 指定类别
 python scripts/sample_ddpm.py \
     --config configs/sample.yaml \
-    --ddpm_checkpoint checkpoints/ddpm/latest.pt \
-    --vqvae_checkpoint saved_ckpt/vqvae-snet-all.pth
-
-# 或使用 DDIM 采样（更快，确定性，推荐）
-python scripts/sample_ddpm.py \
-    --config configs/sample.yaml \
-    --ddpm_checkpoint checkpoints/ddpm/latest.pt \
+    --category chair \
     --vqvae_checkpoint saved_ckpt/vqvae-snet-all.pth \
-    --ddim --sample_steps 200
+    --ddim --sample_steps 200 --count 10
+
+# 采样 table
+python scripts/sample_ddpm.py \
+    --config configs/sample.yaml \
+    --category table \
+    --vqvae_checkpoint saved_ckpt/vqvae-snet-all.pth \
+    --ddim --sample_steps 200 --count 5
 ```
+
+`--category` 参数会自动：
+- 从 `checkpoints/ddpm/{category}/latest.pt` 加载 DDPM 权重
+- 输出 mesh 到 `outputs/meshes/{category}/{category}_generated_xxx.ply`
 
 **采样配置**（`configs/sample.yaml`）：
 
@@ -370,8 +389,7 @@ python scripts/sample_ddpm.py \
 | latent_shape | [3, 16, 16, 16] | 匹配实际 latent |
 | sample_steps | 100 | 采样步数 |
 | **base_channels** | **128** | 匹配增强 UNet |
-| batch_size | 1 | 一次生成 1 个 chair |
-| output_name | sample_generated.ply | 输出文件名 |
+| batch_size | 1 | 一次生成 1 个（--count 控制数量） |
 
 **Latent 反归一化**：脚本自动从 checkpoint 读取 `latent_stats`（mean/std），
 采样完成后执行 `latent * std + mean` 还原到原始分布再解码。无需手动配置。
@@ -450,18 +468,20 @@ python scripts/sample_ddpm.py \
 ## 7. 完整命令拷贝区
 
 ```bash
-# === 一键全流程（在 Project/ 目录下）===
+# === 一键全流程（以 chair 为例，在 Project/ 目录下）===
 
-# 1️⃣ 提取 latent（含统计 mean/std → data/latents/stats.json）
-python scripts/encode_latents.py --config configs/vqvae_sdfusion.yaml --checkpoint saved_ckpt/vqvae-snet-all.pth --split train
-python scripts/encode_latents.py --config configs/vqvae_sdfusion.yaml --checkpoint saved_ckpt/vqvae-snet-all.pth --split val
+# 1️⃣ 提取 latent（每类别一次）
+python scripts/encode_latents.py --config configs/vqvae_sdfusion.yaml --checkpoint saved_ckpt/vqvae-snet-all.pth --category chair --split train
+python scripts/encode_latents.py --config configs/vqvae_sdfusion.yaml --checkpoint saved_ckpt/vqvae-snet-all.pth --category chair --split val
 
 # 2️⃣ 训练 DDPM（200k 步，增强 UNet + latent 归一化）
-python scripts/train_ddpm.py --config configs/train_ddpm.yaml
+python scripts/train_ddpm.py --config configs/train_ddpm.yaml --category chair
 
 # 3️⃣ 采样生成（DDIM，推荐）
-python scripts/sample_ddpm.py --config configs/sample.yaml --ddpm_checkpoint checkpoints/ddpm/latest.pt --vqvae_checkpoint saved_ckpt/vqvae-snet-all.pth --ddim --sample_steps 200
+python scripts/sample_ddpm.py --config configs/sample.yaml --category chair --vqvae_checkpoint saved_ckpt/vqvae-snet-all.pth --ddim --sample_steps 200 --count 10
 
-# 或使用 DDPM 采样
-python scripts/sample_ddpm.py --config configs/sample.yaml --ddpm_checkpoint checkpoints/ddpm/latest.pt --vqvae_checkpoint saved_ckpt/vqvae-snet-all.pth --sample_steps 1000
+# === 训练其他类别同理 ===
+python scripts/encode_latents.py ... --category table --split train
+python scripts/train_ddpm.py ... --category table
+python scripts/sample_ddpm.py ... --category table --ddim
 ```
