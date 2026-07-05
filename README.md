@@ -36,7 +36,10 @@ python scripts/train_ddpm.py --category car
 
 ## 采样
 
-确保 **checkpoints/ddpm/{category}/best.pt** 存在后开始采样：
+权重文件准备：
+
+- 确保 **checkpoints/ddpm/{category}/best.pt** DDPM权重存在；
+- 确保 **saved_ckpt/vqvae-snet-all.pth** VQ-VAE解码器权重存在。
 
 ```bash
 # DDIM 采样（推荐，200步）
