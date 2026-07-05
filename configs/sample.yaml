@@ -1,10 +1,10 @@
 seed: 7
-device: auto
+device: cpu 
 
 paths:
   external_sdfusion: external/SDFusion
   vqvae_checkpoint: checkpoints/sdfusion/vqvae-snet-all.pth
-  ddpm_checkpoint: checkpoints/ddpm/latest.pt
+  ddpm_checkpoint: checkpoints/ddpm/best.pt
   mesh_dir: outputs/meshes
 
 diffusion:

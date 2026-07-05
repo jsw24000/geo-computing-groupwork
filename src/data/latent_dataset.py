@@ -25,10 +25,16 @@ class LatentCacheDataset(Dataset):
 
     If stats (dict with 'mean' and 'std') is provided, latents are normalized
     to N(0,1) via (latent - mean) / std.
+
+    If category is provided, the latent directory becomes {latent_root}/{category}/{split}.
+    Otherwise it is {latent_root}/{split} (backward compatible).
     """
 
-    def __init__(self, latent_root: str | Path, split: str = "train", stats: dict | None = None):
-        self.latent_dir = Path(latent_root) / split
+    def __init__(self, latent_root: str | Path, split: str = "train", category: str | None = None, stats: dict | None = None):
+        if category:
+            self.latent_dir = Path(latent_root) / category / split
+        else:
+            self.latent_dir = Path(latent_root) / split
         if not self.latent_dir.is_dir():
             raise NotADirectoryError(f"Latent split directory not found: {self.latent_dir}")
 
@@ -59,17 +65,18 @@ class LatentCacheDataset(Dataset):
 class LatentCacheDataModule:
     """Convenience wrapper that creates train/val datasets from a latent root."""
 
-    def __init__(self, latent_root: str | Path, batch_size: int = 4, num_workers: int = 0, stats: dict | None = None):
+    def __init__(self, latent_root: str | Path, batch_size: int = 4, num_workers: int = 0, stats: dict | None = None, category: str | None = None):
         self.latent_root = Path(latent_root)
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.stats = stats
+        self.category = category
 
     def train_dataset(self) -> LatentCacheDataset:
-        return LatentCacheDataset(self.latent_root, "train", stats=self.stats)
+        return LatentCacheDataset(self.latent_root, "train", category=self.category, stats=self.stats)
 
     def val_dataset(self) -> LatentCacheDataset:
-        return LatentCacheDataset(self.latent_root, "val", stats=self.stats)
+        return LatentCacheDataset(self.latent_root, "val", category=self.category, stats=self.stats)
 
     def train_dataloader(self) -> torch.utils.data.DataLoader:
         return torch.utils.data.DataLoader(

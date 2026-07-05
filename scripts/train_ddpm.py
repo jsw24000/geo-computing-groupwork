@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train latent DDPM on cached VQ-VAE latents.")
     parser.add_argument("--config", default="configs/train_ddpm.yaml")
     parser.add_argument("--resume", default=None, help="Checkpoint path to resume from")
+    parser.add_argument("--category", default=None, help="Category (e.g. chair, table, car). Overrides config.")
     return parser.parse_args()
 
 
@@ -48,9 +49,23 @@ def main() -> None:
     device = resolve_device(config.get("device", "auto"))
     paths = config["paths"]
 
+    # Resolve category (CLI arg overrides config default)
+    category = args.category or config.get("data", {}).get("category", None)
+
     latent_root = project_path(paths["latent_root"])
-    checkpoint_dir = project_path(paths["checkpoint_dir"])
-    log_dir = project_path(paths["log_dir"])
+    checkpoint_root = project_path(paths["checkpoint_dir"])
+    log_root = project_path(paths["log_dir"])
+
+    # Scope directories by category
+    if category:
+        checkpoint_dir = checkpoint_root / category
+        log_dir = log_root / category
+        stats_path = latent_root / category / "stats.json"
+        print(f"[*] Category: {category}")
+    else:
+        checkpoint_dir = checkpoint_root
+        log_dir = log_root
+        stats_path = latent_root / "stats.json"
     ensure_dirs(checkpoint_dir, log_dir)
 
     # Log file
@@ -78,7 +93,7 @@ def main() -> None:
 
     # --- Data (with latent normalization) ---
     data_cfg = config["data"]
-    stats = load_latent_stats(latent_root / "stats.json")
+    stats = load_latent_stats(stats_path)
     if stats is not None:
         print(f"[*] Latent normalization: mean={stats['mean']:.4f}, std={stats['std']:.4f}")
     else:
@@ -88,6 +103,7 @@ def main() -> None:
         batch_size=int(data_cfg["batch_size"]),
         num_workers=int(data_cfg.get("num_workers", 0)),
         stats=stats,
+        category=category,
     )
     train_loader = dm.train_dataloader()
     val_loader = dm.val_dataloader()
@@ -172,6 +188,7 @@ def main() -> None:
                 "train_loss": loss.item(),
                 "val_loss": val_loss,
                 "best_val_loss": best_val_loss,
+                "category": category,
                 "config": config,
                 "latent_stats": stats,
             }
